@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner Status</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #14181f; --muted: #626b7a; --line: #e2e5ea;
+    --ok: #1a9d55; --warn: #c98a00; --bad: #d63a3a; --unk: #7a8494;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --card: #161b22; --text: #e8ebf0; --muted: #98a2b3; --line: #262d38;
+      --ok: #3ccf7a; --warn: #f0b429; --bad: #ff6b6b; --unk: #8b95a5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 1.4rem; margin: 0 0 24px; font-weight: 650; }
+  .banner {
+    background: var(--card); border: 1px solid var(--line); border-left: 6px solid var(--unk);
+    border-radius: 10px; padding: 20px 22px; display: flex; align-items: center; gap: 14px;
+  }
+  .banner[data-state="operational"] { border-left-color: var(--ok); }
+  .banner[data-state="degraded"] { border-left-color: var(--warn); }
+  .banner[data-state="down"] { border-left-color: var(--bad); }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--unk); flex: none; }
+  [data-state="operational"] .dot { background: var(--ok); }
+  [data-state="degraded"] .dot { background: var(--warn); }
+  [data-state="down"] .dot { background: var(--bad); }
+  .banner h2 { margin: 0; font-size: 1.15rem; }
+  .banner p { margin: 2px 0 0; color: var(--muted); font-size: .92rem; }
+  .reasons { margin: 14px 0 0; padding: 12px 16px 12px 36px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; color: var(--muted); font-size: .92rem; }
+  .reasons:empty { display: none; }
+  h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    margin: 32px 0 10px; font-weight: 600; }
+  .systems { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; }
+  .row .dot { width: 10px; height: 10px; }
+  .row .name { flex: 1; font-weight: 550; min-width: 0; overflow-wrap: anywhere; }
+  .row .meta { color: var(--muted); font-size: .85rem; text-align: right; white-space: nowrap; }
+  .row[data-state="active"] .dot { background: var(--ok); }
+  .row[data-state="quiet"] .dot { background: var(--warn); }
+  .empty { padding: 18px; color: var(--muted); }
+  footer { margin-top: 28px; color: var(--muted); font-size: .82rem; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  @media (max-width: 480px) { .row { flex-wrap: wrap; } .row .meta { width: 100%; text-align: left; padding-left: 22px; white-space: normal; } }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Scanner Status</h1>
+
+  <section class="banner" id="banner" data-state="unknown" aria-live="polite">
+    <span class="dot"></span>
+    <div>
+      <h2 id="headline">Checking…</h2>
+      <p id="sub"></p>
+    </div>
+  </section>
+  <ul class="reasons" id="reasons"></ul>
+
+  <div id="systemsWrap" hidden>
+    <h3>Systems</h3>
+    <div class="systems" id="systems"></div>
+  </div>
+
+  <footer>
+    <span id="checked">&nbsp;</span>
+    <span id="uptime"></span>
+  </footer>
+</main>
+
+<script>
+(function () {
+  var POLL_MS = 30000;
+  var $ = function (id) { return document.getElementById(id); };
+
+  var HEADLINES = {
+    operational: 'All systems operational',
+    degraded: 'Degraded performance',
+    down: 'Service unavailable',
+    unknown: 'Status unknown'
+  };
+
+  function ago(ms) {
+    if (!ms) return 'no calls recorded';
+    var s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return s + 's ago';
+    var m = Math.round(s / 60);
+    if (m < 60) return m + ' min ago';
+    var h = Math.round(m / 60);
+    if (h < 48) return h + ' hr ago';
+    return Math.round(h / 24) + ' days ago';
+  }
+
+  function dur(sec) {
+    var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+    if (d) return d + 'd ' + h + 'h';
+    if (h) return h + 'h ' + m + 'm';
+    return m + 'm';
+  }
+
+  function render(d) {
+    if (d.title) { $('title').textContent = d.title; document.title = d.title; }
+    $('banner').dataset.state = d.overall;
+    $('headline').textContent = HEADLINES[d.overall] || HEADLINES.unknown;
+    $('sub').textContent = d.message || '';
+
+    var rs = $('reasons');
+    rs.textContent = '';
+    (d.reasons || []).forEach(function (r) {
+      var li = document.createElement('li');
+      li.textContent = r;
+      rs.appendChild(li);
+    });
+
+    var wrap = $('systemsWrap'), list = $('systems');
+    list.textContent = '';
+    if (d.systems && d.systems.length) {
+      wrap.hidden = false;
+      d.systems.forEach(function (s) {
+        var row = document.createElement('div');
+        row.className = 'row';
+        row.dataset.state = s.callsLastHour > 0 ? 'active' : 'quiet';
+        var dot = document.createElement('span'); dot.className = 'dot';
+        var name = document.createElement('span'); name.className = 'name'; name.textContent = s.label;
+        var meta = document.createElement('span'); meta.className = 'meta';
+        meta.textContent = s.callsLastHour + (s.callsLastHour === 1 ? ' call' : ' calls') +
+          ' in the last hour · last call ' + ago(s.lastCallAt);
+        row.appendChild(dot); row.appendChild(name); row.appendChild(meta);
+        list.appendChild(row);
+      });
+    } else {
+      wrap.hidden = true;
+    }
+
+    $('checked').textContent = d.checkedAt ? 'Checked ' + new Date(d.checkedAt).toLocaleTimeString() : '';
+    $('uptime').textContent = typeof d.uptimeSeconds === 'number' ? 'Server uptime ' + dur(d.uptimeSeconds) : '';
+  }
+
+  function fail() {
+    render({ overall: 'unknown', message: 'Could not load status. Retrying…', systems: [], reasons: [] });
+  }
+
+  function load() {
+    fetch('/api/status', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(render)
+      .catch(fail);
+  }
+
+  load();
+  setInterval(function () { if (!document.hidden) load(); }, POLL_MS);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
+})();
+</script>
+</body>
+</html>
